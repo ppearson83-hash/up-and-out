@@ -44,12 +44,30 @@ describe.skipIf(!hasDb)("completeTask flow", () => {
     expect(kid.balance).toBe(6);
   });
 
-  it("gives no bonus after leave time", async () => {
+  it("keeps the bonus when un-ticking after leave time, and gives none for a late finish", async () => {
     const { completeTask, uncompleteTask, getState } = await import("@/lib/family");
+    // 07:30Z = 08:30 London, after 08:15: un-tick keeps the +3, re-tick re-earns only the token.
+    await uncompleteTask(familyId, kidId, taskIds[2], at("07:30"));
+    expect((await getState(familyId, at("07:31"))).kids[0].balance).toBe(5);
+    expect(await completeTask(familyId, kidId, taskIds[2], at("07:32"))).toMatchObject({ awarded: 1, allDone: true, bonus: 0 });
+    expect((await getState(familyId, at("07:33"))).kids[0].balance).toBe(6);
+    // A genuinely late finish: un-tick before leave, finish after.
     await uncompleteTask(familyId, kidId, taskIds[2], at("06:50"));
-    // 07:30Z = 08:30 London, after 08:15.
-    expect(await completeTask(familyId, kidId, taskIds[2], at("07:30"))).toMatchObject({ awarded: 1, allDone: true, bonus: 0 });
-    expect((await getState(familyId, at("07:31"))).kids[0].balance).toBe(3);
+    expect((await getState(familyId, at("06:51"))).kids[0].balance).toBe(2);
+    expect(await completeTask(familyId, kidId, taskIds[2], at("07:40"))).toMatchObject({ awarded: 1, allDone: true, bonus: 0 });
+    expect((await getState(familyId, at("07:41"))).kids[0].balance).toBe(3);
+  });
+
+  it("records the day for the streak even when the bonus is zero", async () => {
+    const { completeTask, uncompleteTask, getState } = await import("@/lib/family");
+    const { prisma } = await import("@/lib/prisma");
+    await prisma.family.update({ where: { id: familyId }, data: { allDoneBonus: 0 } });
+    await uncompleteTask(familyId, kidId, taskIds[2], at("06:55"));
+    expect(await completeTask(familyId, kidId, taskIds[2], at("06:56"))).toMatchObject({ allDone: true, bonus: 0 });
+    const kid = (await getState(familyId, at("06:57"))).kids[0];
+    expect(kid.streak).toBe(1);
+    expect(kid.balance).toBe(3);
+    await prisma.family.update({ where: { id: familyId }, data: { allDoneBonus: 3 } });
   });
 
   it("claims the goal and carries the remainder", async () => {

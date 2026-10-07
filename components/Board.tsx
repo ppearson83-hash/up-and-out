@@ -2,7 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fmtTime, type FamilyState } from "@/lib/client";
+import { api, ApiError, fmtTime, type FamilyState } from "@/lib/client";
 import { hhmmToMinutes } from "@/lib/dates";
 import { COLOURS, iconFor, isColourKey, TOKENS, isTokenKey, tokenLabel } from "@/lib/themes";
 
@@ -31,14 +31,20 @@ export function Board({ initial }: { initial: FamilyState }) {
     try {
       const next = await api<FamilyState>("/api/state");
       setState(next); setFetchedAt(Date.now()); setNow(Date.now());
-    } catch { /* keep last good state */ }
-  }, []);
+    } catch (e) {
+      // Expired session: back to sign-in rather than a silently stale board.
+      if (e instanceof ApiError && e.status === 401) router.push("/login");
+      /* otherwise keep the last good state */
+    }
+  }, [router]);
 
   useEffect(() => {
+    // Initial fetch stamps fetchedAt so the ring keeps time even if later polls fail.
+    const t0 = setTimeout(() => { void refresh(); }, 0);
     const t = setInterval(() => { setNow(Date.now()); void refresh(); }, POLL_MS);
     const vis = () => { if (document.visibilityState === "visible") { setNow(Date.now()); void refresh(); } };
     document.addEventListener("visibilitychange", vis);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", vis); };
+    return () => { clearTimeout(t0); clearInterval(t); document.removeEventListener("visibilitychange", vis); };
   }, [refresh]);
 
   // Keep the tablet awake while the board is showing.

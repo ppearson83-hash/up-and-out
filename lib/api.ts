@@ -35,6 +35,7 @@ export function str(v: unknown, max = 60): string {
 }
 
 export function int(v: unknown, min: number, max: number): number {
+  if (typeof v === "string" && v.trim() === "") throw new BadRequestError("expected a number");
   const n = typeof v === "string" ? Number(v) : v;
   if (typeof n !== "number" || !Number.isInteger(n) || n < min || n > max) {
     throw new BadRequestError(`expected an integer between ${min} and ${max}`);

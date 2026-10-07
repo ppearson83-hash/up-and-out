@@ -29,41 +29,56 @@ export function allDoneDates(entries: Entry[]): string[] {
   return [...set].sort();
 }
 
+export type StreakRun = { length: number; start: string | null };
+
 /**
- * Consecutive counted days ending on `today` (or yesterday, if today is not
- * yet done) on which everything was finished. With schoolDaysOnly, weekends
- * are skipped rather than breaking the run.
+ * The run of consecutive counted days, ending on `today` (or on the most
+ * recent counted day before it, if today is not finished yet), on which
+ * everything was finished. With schoolDaysOnly, weekends are skipped rather
+ * than breaking the run. `start` is the earliest date in the run.
  */
-export function streak(entries: Entry[], today: string, rules: Pick<RewardRules, "schoolDaysOnly">): number {
+export function streakRun(entries: Entry[], today: string, rules: Pick<RewardRules, "schoolDaysOnly">): StreakRun {
   const done = new Set(allDoneDates(entries));
-  if (done.size === 0) return 0;
+  const none = { length: 0, start: null };
+  if (done.size === 0) return none;
   const counts = (d: string) => !(rules.schoolDaysOnly && isWeekend(d));
 
-  // Start from today if done today, otherwise from the most recent counted
-  // day before today: an unfinished today must not break yesterday's run.
   let cursor = today;
   if (!done.has(cursor)) {
     cursor = addDays(cursor, -1);
     while (!counts(cursor)) cursor = addDays(cursor, -1);
-    if (!done.has(cursor)) return 0;
+    if (!done.has(cursor)) return none;
   }
-  let n = 0;
+  let n = 0, start: string | null = null;
   for (let guard = 0; guard < 400; guard++) {
     if (counts(cursor)) {
       if (!done.has(cursor)) break;
-      n++;
+      n++; start = cursor;
     }
     cursor = addDays(cursor, -1);
   }
-  return n;
+  return { length: n, start };
 }
 
-/** True when the streak that includes `today` has just reached a multiple of streakLength. */
+export function streak(entries: Entry[], today: string, rules: Pick<RewardRules, "schoolDaysOnly">): number {
+  return streakRun(entries, today, rules).length;
+}
+
+/**
+ * True when today is a counted, finished day and the current run has earned
+ * more streak bonuses than have been paid within it. Paid bonuses are the
+ * `streak` entries dated inside the run, so a weekend finish (not counted)
+ * or a second tick on the same day never pays twice.
+ */
 export function streakBonusDue(entries: Entry[], today: string, rules: RewardRules): boolean {
   if (rules.streakLength <= 0 || rules.streakBonus <= 0) return false;
-  const n = streak(entries, today, rules);
-  if (n === 0 || n % rules.streakLength !== 0) return false;
-  return !entries.some((e) => e.kind === "streak" && e.date === today);
+  if (rules.schoolDaysOnly && isWeekend(today)) return false;
+  if (!entries.some((e) => e.kind === "all_done" && e.date === today)) return false;
+  const run = streakRun(entries, today, rules);
+  if (run.length === 0 || run.start === null) return false;
+  const earned = Math.floor(run.length / rules.streakLength);
+  const paid = entries.filter((e) => e.kind === "streak" && e.date >= run.start! && e.date <= today).length;
+  return earned > paid;
 }
 
 export type GoalProgress = {

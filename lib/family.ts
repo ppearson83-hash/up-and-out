@@ -1,6 +1,6 @@
 // Family state and the mutations the board and settings screens perform.
 // Everything here is scoped by familyId; the API layer never touches Prisma.
-import type { LedgerKind as DbLedgerKind } from "@/app/generated/prisma/client";
+import type { LedgerKind as DbLedgerKind, Prisma } from "@/app/generated/prisma/client";
 import { BadRequestError, NotFoundError } from "@/lib/errors";
 import { hhmmToMinutes, localDate, localMinutes } from "@/lib/dates";
 import { prisma } from "@/lib/prisma";
@@ -110,6 +110,17 @@ export async function getState(familyId: string, now = new Date()): Promise<Fami
   };
 }
 
+function beforeLeave(family: { timezone: string; leaveTime: string }, now: Date): boolean {
+  return localMinutes(family.timezone, now) < hhmmToMinutes(family.leaveTime);
+}
+
+// Serialises writes for one kid: two devices ticking the last two jobs at
+// once must not both miss the all-done bonus, and two parents claiming at
+// once must not both pass the balance check.
+async function lockKid(tx: Prisma.TransactionClient, kidId: string): Promise<void> {
+  await tx.$executeRaw`SELECT id FROM "Kid" WHERE id = ${kidId} FOR UPDATE`;
+}
+
 async function kidInFamily(kidId: string, familyId: string) {
   const kid = await prisma.kid.findFirst({ where: { id: kidId, familyId, archived: false } });
   if (!kid) throw new NotFoundError("kid");
@@ -132,6 +143,7 @@ export async function completeTask(familyId: string, kidId: string, taskId: stri
   const today = localDate(family.timezone, now);
 
   return prisma.$transaction(async (tx) => {
+    await lockKid(tx, kid.id);
     const existing = await tx.completion.findUnique({ where: { kidId_taskId_date: { kidId: kid.id, taskId: task.id, date: today } } });
     if (existing) return { awarded: 0, allDone: false, bonus: 0, streakBonus: 0 };
 
@@ -150,10 +162,11 @@ export async function completeTask(familyId: string, kidId: string, taskId: stri
     const allDone = activeCount > 0 && doneCount === activeCount;
     let bonus = 0, streakBonus = 0;
     if (allDone) {
-      const alreadyBonus = await tx.ledgerEntry.findFirst({ where: { kidId: kid.id, date: today, kind: "all_done" } });
-      const beforeLeave = localMinutes(family.timezone, now) < hhmmToMinutes(family.leaveTime);
-      if (!alreadyBonus && beforeLeave && rules.allDoneBonus > 0) {
-        bonus = rules.allDoneBonus;
+      const alreadyDone = await tx.ledgerEntry.findFirst({ where: { kidId: kid.id, date: today, kind: "all_done" } });
+      // The all_done row is the streak record, so it is written even when the
+      // bonus is configured to 0; only the amount depends on the setting.
+      if (!alreadyDone && beforeLeave(family, now)) {
+        bonus = Math.max(0, rules.allDoneBonus);
         await tx.ledgerEntry.create({ data: { kidId: kid.id, date: today, kind: "all_done", amount: bonus, note: "Everything done before leaving time" } });
         const ledgerNow = await tx.ledgerEntry.findMany({ where: { kidId: kid.id }, select: { date: true, kind: true, amount: true } });
         if (streakBonusDue(ledgerNow, today, rules)) {
@@ -167,17 +180,25 @@ export async function completeTask(familyId: string, kidId: string, taskId: stri
   });
 }
 
-/** Un-tap a job. Removes its token and any same-day bonuses, which no longer hold. */
+/**
+ * Un-tap a job. Removes its token. Before leave time the same-day bonuses go
+ * too, since finishing before leaving no longer holds and re-ticking will
+ * re-award them; after leave time they stay, because a re-tick could not
+ * earn them back and the morning was in fact finished on time.
+ */
 export async function uncompleteTask(familyId: string, kidId: string, taskId: string, now = new Date()): Promise<void> {
   const family = await loadFamily(familyId);
   const kid = await kidInFamily(kidId, familyId);
   const today = localDate(family.timezone, now);
   await prisma.$transaction(async (tx) => {
+    await lockKid(tx, kid.id);
     const existing = await tx.completion.findUnique({ where: { kidId_taskId_date: { kidId: kid.id, taskId, date: today } } });
     if (!existing) return;
     // The task ledger entry cascades with the completion.
     await tx.completion.delete({ where: { id: existing.id } });
-    await tx.ledgerEntry.deleteMany({ where: { kidId: kid.id, date: today, kind: { in: ["all_done", "streak"] } } });
+    if (beforeLeave(family, now)) {
+      await tx.ledgerEntry.deleteMany({ where: { kidId: kid.id, date: today, kind: { in: ["all_done", "streak"] } } });
+    }
   });
 }
 
@@ -196,6 +217,7 @@ export async function claimGoal(familyId: string, kidId: string, now = new Date(
   const kid = await kidInFamily(kidId, familyId);
   const today = localDate(family.timezone, now);
   return prisma.$transaction(async (tx) => {
+    await lockKid(tx, kid.id);
     const entries = await tx.ledgerEntry.findMany({ where: { kidId: kid.id }, select: { date: true, kind: true, amount: true } });
     const amount = claimAmount(entries, kid.goalCost);
     if (amount === null) throw new BadRequestError("goal not reached");

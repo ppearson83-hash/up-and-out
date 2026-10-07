@@ -139,12 +139,12 @@ function RewardsTab({ state, busy, run }: { state: FamilyState; busy: boolean; r
         <h3>Rules</h3>
         <div className="cols" style={{ marginTop: 8 }}>
           <div>
-            <label>Tokens per job<input name="tokenPerTask" type="number" min={0} max={10} defaultValue={f.tokenPerTask} /></label>
-            <label>Bonus for everything done before leaving time<input name="allDoneBonus" type="number" min={0} max={50} defaultValue={f.allDoneBonus} /></label>
+            <label>Tokens per job<input name="tokenPerTask" type="number" required min={0} max={10} defaultValue={f.tokenPerTask} /></label>
+            <label>Bonus for everything done before leaving time<input name="allDoneBonus" type="number" required min={0} max={50} defaultValue={f.allDoneBonus} /></label>
           </div>
           <div>
-            <label>Streak length (days in a row)<input name="streakLength" type="number" min={0} max={30} defaultValue={f.streakLength} /></label>
-            <label>Streak bonus<input name="streakBonus" type="number" min={0} max={50} defaultValue={f.streakBonus} /></label>
+            <label>Streak length (days in a row)<input name="streakLength" type="number" required min={0} max={30} defaultValue={f.streakLength} /></label>
+            <label>Streak bonus<input name="streakBonus" type="number" required min={0} max={50} defaultValue={f.streakBonus} /></label>
           </div>
         </div>
         <div className="actions" style={{ marginTop: 12 }}><button className="btn primary" type="submit" disabled={busy}>Save rules</button></div>

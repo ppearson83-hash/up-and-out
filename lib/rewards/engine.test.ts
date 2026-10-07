@@ -50,10 +50,26 @@ describe("streakBonusDue", () => {
   it("is not due at four", () => {
     expect(streakBonusDue(five.slice(1), "2026-10-05", rules)).toBe(false);
   });
+  it("is not due on a weekend finish, and not again on Monday", () => {
+    const sat = [...five, e("2026-10-05", "streak", 5), e("2026-10-10", "all_done", 3)];
+    expect(streakBonusDue(sat, "2026-10-10", rules)).toBe(false);
+    const mon = [...sat, e("2026-10-12", "all_done", 3)];
+    expect(streakBonusDue(mon, "2026-10-12", rules)).toBe(false);
+  });
+  it("is due on a weekend when weekends count", () => {
+    const all = { ...rules, schoolDaysOnly: false };
+    const run = ["2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10"].map((d) => e(d, "all_done", 3));
+    expect(streakBonusDue(run, "2026-10-10", all)).toBe(true);
+  });
+  it("is not due when today is not finished", () => {
+    expect(streakBonusDue(five.slice(0, 4), "2026-10-05", rules)).toBe(false);
+  });
   it("is due again at ten", () => {
     const ten = [...five, ...["2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-12"].map((d) => e(d, "all_done", 3))];
-    expect(streakBonusDue(ten, "2026-10-12", rules)).toBe(true);
-    expect(streakBonusDue(ten, "2026-10-09", rules)).toBe(false);
+    expect(streakBonusDue([...ten, e("2026-10-05", "streak", 5)], "2026-10-12", rules)).toBe(true);
+    expect(streakBonusDue([...ten, e("2026-10-05", "streak", 5)], "2026-10-09", rules)).toBe(false);
+    // Missed Monday's payout entirely (bonus was 0 then): paid once covers the first five, second is still due.
+    expect(streakBonusDue([...ten, e("2026-10-12", "streak", 5)], "2026-10-12", rules)).toBe(true);
   });
 });
 
