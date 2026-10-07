@@ -1,0 +1,120 @@
+// Up and Out data model. Rewards are a ledger: balance, streak and goal
+// progress are derived from LedgerEntry rows, never stored.
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../app/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [citext]
+}
+
+// A parent. Sessions are JWT (Credentials provider); no adapter tables yet.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique @db.Citext
+  name         String
+  passwordHash String
+  familyId     String
+  family       Family   @relation(fields: [familyId], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+model Family {
+  id             String  @id @default(cuid())
+  name           String
+  // bcrypt hash of the 4-digit parent PIN; null until the parent sets one.
+  pinHash        String?
+  // Second parent joins by entering this code at signup.
+  inviteCode     String  @unique
+  timezone       String  @default("Europe/London")
+  startTime      String  @default("07:00") // HH:MM local
+  leaveTime      String  @default("08:15")
+  schoolDaysOnly Boolean @default(true)
+  // Reward tuning. Tokens per job, bonus for everything done before leave
+  // time, and the streak length that earns a streak bonus.
+  tokenPerTask   Int     @default(1)
+  allDoneBonus   Int     @default(3)
+  streakLength   Int     @default(5)
+  streakBonus    Int     @default(5)
+  createdAt      DateTime @default(now())
+
+  users User[]
+  kids  Kid[]
+}
+
+model Kid {
+  id        String   @id @default(cuid())
+  familyId  String
+  family    Family   @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  name      String
+  // One of the palette keys in lib/themes.ts (marigold, seaglass, ...).
+  colour    String   @default("marigold")
+  // One of the token themes in lib/themes.ts (star, dino, unicorn, rocket).
+  theme     String   @default("star")
+  goalName  String   @default("")
+  goalCost  Int      @default(20)
+  sortOrder Int      @default(0)
+  archived  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  tasks       Task[]
+  completions Completion[]
+  ledger      LedgerEntry[]
+}
+
+model Task {
+  id        String  @id @default(cuid())
+  kidId     String
+  kid       Kid     @relation(fields: [kidId], references: [id], onDelete: Cascade)
+  label     String
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+
+  completions Completion[]
+
+  @@index([kidId, sortOrder])
+}
+
+// One row per kid, task and family-local date (YYYY-MM-DD).
+model Completion {
+  id          String   @id @default(cuid())
+  kidId       String
+  kid         Kid      @relation(fields: [kidId], references: [id], onDelete: Cascade)
+  taskId      String
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  date        String
+  completedAt DateTime @default(now())
+
+  ledgerEntry LedgerEntry?
+
+  @@unique([kidId, taskId, date])
+  @@index([kidId, date])
+}
+
+enum LedgerKind {
+  task
+  all_done
+  streak
+  claim
+  adjust
+}
+
+model LedgerEntry {
+  id           String      @id @default(cuid())
+  kidId        String
+  kid          Kid         @relation(fields: [kidId], references: [id], onDelete: Cascade)
+  date         String
+  kind         LedgerKind
+  amount       Int
+  note         String      @default("")
+  // Set for kind=task so undo can find and delete the matching entry.
+  completionId String?     @unique
+  completion   Completion? @relation(fields: [completionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime    @default(now())
+
+  @@index([kidId, date])
+}

@@ -1,0 +1,112 @@
+// Pure reward rules. No database, no clock: callers pass the ledger rows
+// and the dates, so every rule is unit-testable and the same code answers
+// "what is the balance" everywhere.
+import { addDays, isWeekend } from "@/lib/dates";
+
+export type LedgerKind = "task" | "all_done" | "streak" | "claim" | "adjust";
+
+export type Entry = {
+  date: string;
+  kind: LedgerKind;
+  amount: number;
+};
+
+export type RewardRules = {
+  tokenPerTask: number;
+  allDoneBonus: number;
+  streakLength: number;
+  streakBonus: number;
+  schoolDaysOnly: boolean;
+};
+
+export function balance(entries: Entry[]): number {
+  return entries.reduce((sum, e) => sum + e.amount, 0);
+}
+
+/** Dates (unique, ascending) on which the kid finished everything. */
+export function allDoneDates(entries: Entry[]): string[] {
+  const set = new Set(entries.filter((e) => e.kind === "all_done").map((e) => e.date));
+  return [...set].sort();
+}
+
+/**
+ * Consecutive counted days ending on `today` (or yesterday, if today is not
+ * yet done) on which everything was finished. With schoolDaysOnly, weekends
+ * are skipped rather than breaking the run.
+ */
+export function streak(entries: Entry[], today: string, rules: Pick<RewardRules, "schoolDaysOnly">): number {
+  const done = new Set(allDoneDates(entries));
+  if (done.size === 0) return 0;
+  const counts = (d: string) => !(rules.schoolDaysOnly && isWeekend(d));
+
+  // Start from today if done today, otherwise from the most recent counted
+  // day before today: an unfinished today must not break yesterday's run.
+  let cursor = today;
+  if (!done.has(cursor)) {
+    cursor = addDays(cursor, -1);
+    while (!counts(cursor)) cursor = addDays(cursor, -1);
+    if (!done.has(cursor)) return 0;
+  }
+  let n = 0;
+  for (let guard = 0; guard < 400; guard++) {
+    if (counts(cursor)) {
+      if (!done.has(cursor)) break;
+      n++;
+    }
+    cursor = addDays(cursor, -1);
+  }
+  return n;
+}
+
+/** True when the streak that includes `today` has just reached a multiple of streakLength. */
+export function streakBonusDue(entries: Entry[], today: string, rules: RewardRules): boolean {
+  if (rules.streakLength <= 0 || rules.streakBonus <= 0) return false;
+  const n = streak(entries, today, rules);
+  if (n === 0 || n % rules.streakLength !== 0) return false;
+  return !entries.some((e) => e.kind === "streak" && e.date === today);
+}
+
+export type GoalProgress = {
+  balance: number;
+  cost: number;
+  /** 0..1 */
+  fraction: number;
+  reached: boolean;
+  remaining: number;
+};
+
+export function goalProgress(entries: Entry[], cost: number): GoalProgress {
+  const b = balance(entries);
+  const c = Math.max(0, cost);
+  const reached = c > 0 && b >= c;
+  return {
+    balance: b,
+    cost: c,
+    fraction: c > 0 ? Math.max(0, Math.min(1, b / c)) : 0,
+    reached,
+    remaining: Math.max(0, c - b),
+  };
+}
+
+/**
+ * Tokens the kid may still earn today from jobs: a cap so nothing can be
+ * farmed by re-adding jobs. `taskCount` is the active jobs today.
+ */
+export function dailyTaskCap(taskCount: number, rules: Pick<RewardRules, "tokenPerTask">): number {
+  return Math.max(0, taskCount) * Math.max(0, rules.tokenPerTask);
+}
+
+export function earnedTodayFromTasks(entries: Entry[], today: string): number {
+  return entries
+    .filter((e) => e.kind === "task" && e.date === today)
+    .reduce((s, e) => s + e.amount, 0);
+}
+
+/**
+ * What a claim should write: a negative entry for the goal cost. Returns
+ * null when the balance does not cover it.
+ */
+export function claimAmount(entries: Entry[], cost: number): number | null {
+  if (cost <= 0) return null;
+  return balance(entries) >= cost ? -cost : null;
+}

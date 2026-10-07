@@ -7,7 +7,7 @@ the API, so phone and tablet stay in step.
 
 ## Stack
 
-Next.js (App Router) · TypeScript strict · Tailwind 4 · Prisma + pg on Neon Postgres ·
+Next.js (App Router) · TypeScript strict · plain CSS (`app/globals.css`) · Prisma + pg on Neon Postgres ·
 NextAuth v5 (email + password, Credentials + JWT) · vitest · PWA manifest.
 Client-rendered app shell under `app/` talking only to JSON routes under `app/api/`
 (so a Capacitor shell or native app can reuse the API later).
@@ -15,7 +15,7 @@ Client-rendered app shell under `app/` talking only to JSON routes under `app/ap
 ## Run
 
 - `npm install` — also runs `prisma generate`
-- `npm run dev` — needs `DATABASE_URL` and `AUTH_SECRET` in `.env` (see `.env.example`)
+- `npm run dev` — `next dev` on the embedded local Postgres (`prisma dev`), migrations applied first; no `.env` needed
 - `npm run db:migrate` — apply migrations to the embedded local Postgres (`prisma dev`)
 - `npm run verify` — typecheck + lint + unit tests; green before claiming done
 
