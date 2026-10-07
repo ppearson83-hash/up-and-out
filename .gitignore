@@ -1,0 +1,40 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# testing
+/coverage
+/test-results/
+/playwright-report/
+
+# next.js
+/.next/
+/out/
+/build
+next-env.d.ts
+*.tsbuildinfo
+
+# env files (.env.example is the committed template)
+.env
+.env.*
+!.env.example
+
+# vercel
+.vercel
+
+# prisma generated client
+/app/generated/prisma
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
+__pycache__/
+
+# claude
+.claude/settings.local.json
+.ralph/
+.agents/
+.claude/skills/
+skills-lock.json
