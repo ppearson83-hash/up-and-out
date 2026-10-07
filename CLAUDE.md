@@ -27,6 +27,7 @@ Client-rendered app shell under `app/` talking only to JSON routes under `app/ap
 ## Deploy
 
 Release: trunk
+Production: https://up-and-out-eosin.vercel.app
 Git push only: branch push = preview, `main` = production. `vercel.json` runs
 `prisma migrate deploy` then `next build`. No CLI deploys.
 
