@@ -65,20 +65,18 @@ export function streak(entries: Entry[], today: string, rules: Pick<RewardRules,
 }
 
 /**
- * True when today is a counted, finished day and the current run has earned
- * more streak bonuses than have been paid within it. Paid bonuses are the
- * `streak` entries dated inside the run, so a weekend finish (not counted)
- * or a second tick on the same day never pays twice.
+ * True when today is a counted, finished day on which the run length hits a
+ * multiple of streakLength, and no streak bonus has been paid today. A
+ * weekend finish (not counted) never pays, and Monday is then n+1, not a
+ * multiple, so the weekend cannot cause a repeat.
  */
 export function streakBonusDue(entries: Entry[], today: string, rules: RewardRules): boolean {
   if (rules.streakLength <= 0 || rules.streakBonus <= 0) return false;
   if (rules.schoolDaysOnly && isWeekend(today)) return false;
   if (!entries.some((e) => e.kind === "all_done" && e.date === today)) return false;
-  const run = streakRun(entries, today, rules);
-  if (run.length === 0 || run.start === null) return false;
-  const earned = Math.floor(run.length / rules.streakLength);
-  const paid = entries.filter((e) => e.kind === "streak" && e.date >= run.start! && e.date <= today).length;
-  return earned > paid;
+  const n = streak(entries, today, rules);
+  if (n === 0 || n % rules.streakLength !== 0) return false;
+  return !entries.some((e) => e.kind === "streak" && e.date === today);
 }
 
 export type GoalProgress = {

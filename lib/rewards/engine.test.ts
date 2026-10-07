@@ -68,8 +68,7 @@ describe("streakBonusDue", () => {
     const ten = [...five, ...["2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-12"].map((d) => e(d, "all_done", 3))];
     expect(streakBonusDue([...ten, e("2026-10-05", "streak", 5)], "2026-10-12", rules)).toBe(true);
     expect(streakBonusDue([...ten, e("2026-10-05", "streak", 5)], "2026-10-09", rules)).toBe(false);
-    // Missed Monday's payout entirely (bonus was 0 then): paid once covers the first five, second is still due.
-    expect(streakBonusDue([...ten, e("2026-10-12", "streak", 5)], "2026-10-12", rules)).toBe(true);
+    expect(streakBonusDue([...ten, e("2026-10-12", "streak", 5)], "2026-10-12", rules)).toBe(false);
   });
 });
 

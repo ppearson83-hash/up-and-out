@@ -107,7 +107,7 @@ function KidsTab({ kids, busy, onSave }: { kids: FamilyState["kids"]; busy: bool
             </div>
             <div className="times">
               <label>Saving for<input value={k.goalName} maxLength={40} placeholder="Trip to the park" onChange={(e) => update(i, { goalName: e.target.value })} /></label>
-              <label>Goal costs<input type="number" min={0} max={1000} value={k.goalCost} onChange={(e) => update(i, { goalCost: Number(e.target.value) })} /></label>
+              <label>Goal costs<input type="number" required min={0} max={1000} value={k.goalCost} onChange={(e) => update(i, { goalCost: Number(e.target.value) })} /></label>
             </div>
             <label>Jobs, one per line<textarea value={k.tasks} onChange={(e) => update(i, { tasks: e.target.value })} /></label>
             <span style={{ display: "inline-block", width: 24, height: 24, borderRadius: 8, background: COLOURS[k.colour as keyof typeof COLOURS]?.k ?? "#ccc" }} aria-hidden="true" />
