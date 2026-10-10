@@ -160,8 +160,8 @@ export function Board({ initial }: { initial: FamilyState }) {
               <div className="meter" aria-hidden="true"><i style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></div>
               {todays.length === 0 && <p className="hint">Nothing on today. Enjoy!</p>}
               {todays.map((r) => {
-                // Expanded by default when it is the current routine, or unfinished and not yet over.
-                const expanded = open[r.id] ?? (r.id === current?.id || (!r.allDone && r.status !== "over"));
+                // Only the current routine is open by default; the rest can be tapped open.
+                const expanded = open[r.id] ?? (r.id === current?.id);
                 const todo = r.tasks.filter((t) => !t.done), fin = r.tasks.filter((t) => t.done);
                 return (
                   <div key={r.id} className={`routine${expanded ? " open" : ""} ${r.status}`}>

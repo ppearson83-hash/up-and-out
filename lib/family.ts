@@ -111,7 +111,9 @@ export async function getState(familyId: string, now = new Date()): Promise<Fami
         return {
           id: r.id, name: r.name, startTime: r.startTime, endTime: r.endTime, days: r.days, bonus: r.bonus, streak: r.streak,
           scheduled: isRoutineScheduled(r, today), status: routineStatus(r, nowM),
-          tasks: todays, allTasks: r.tasks.map((t) => ({ id: t.id, label: t.label, days: t.days, date: t.date })),
+          tasks: todays,
+          // Past one-offs are over; leave them out of the editor and calendar.
+          allTasks: r.tasks.filter((t) => !t.date || t.date >= today).map((t) => ({ id: t.id, label: t.label, days: t.days, date: t.date })),
           doneCount, allDone: todays.length > 0 && doneCount === todays.length,
           bonusEarned: entries.some((e) => e.kind === "all_done" && e.date === today && e.routineId === r.id),
         };
@@ -159,7 +161,7 @@ export type CompleteResult = { awarded: number; allDone: boolean; bonus: number;
 /**
  * Tap a job. Idempotent per (kid, task, day). Awards the task token (under
  * the daily cap), then the routine's on-time bonus if this finished the
- * routine's jobs for today before its end time, then the streak bonus if
+ * routine's jobs for today inside its time window, then the streak bonus if
  * that routine carries the streak and it just hit its length.
  */
 export async function completeTask(familyId: string, kidId: string, taskId: string, now = new Date()): Promise<CompleteResult> {
@@ -195,7 +197,8 @@ export async function completeTask(familyId: string, kidId: string, taskId: stri
       const alreadyDone = await tx.ledgerEntry.findFirst({ where: { kidId: kid.id, date: today, kind: "all_done", routineId: routine.id } });
       // The all_done row is the streak record, so it is written even when the
       // routine's bonus is 0; only the amount depends on the setting.
-      if (!alreadyDone && nowM < hhmmToMinutes(routine.endTime)) {
+      const inWindow = nowM >= hhmmToMinutes(routine.startTime) && nowM < hhmmToMinutes(routine.endTime);
+      if (!alreadyDone && inWindow) {
         bonus = Math.max(0, routine.bonus);
         await tx.ledgerEntry.create({ data: { kidId: kid.id, date: today, kind: "all_done", amount: bonus, note: `${routine.name} done on time`, routineId: routine.id } });
         if (routine.streak) {
@@ -222,7 +225,9 @@ export async function completeTask(familyId: string, kidId: string, taskId: stri
 export async function uncompleteTask(familyId: string, kidId: string, taskId: string, now = new Date()): Promise<void> {
   const family = await loadFamily(familyId);
   const kid = await kidInFamily(kidId, familyId);
-  const task = await taskOfKid(taskId, kid.id);
+  // No active/archived filter: a job renamed or removed after being ticked must still undo.
+  const task = await prisma.task.findFirst({ where: { id: taskId, routine: { kidId: kid.id } }, include: { routine: true } });
+  if (!task) throw new NotFoundError("task");
   const today = localDate(family.timezone, now);
   const nowM = localMinutes(family.timezone, now);
   await prisma.$transaction(async (tx) => {
@@ -294,9 +299,19 @@ export type KidInput = { id?: string; name: string; colour: string; theme: strin
  * Existing kids (by id) keep their ledger; kids left out are archived, not
  * deleted. Routines are matched by id and jobs by label within a routine, so
  * a renamed job keeps today's tick only if the label is unchanged, which is
- * the honest outcome. Routines left out are archived so their history survives.
+ * the honest outcome. A one-off is keyed by label and date, so it can share a
+ * label with a recurring job. Routines left out are archived so their history survives.
  */
-export async function saveKids(familyId: string, kids: KidInput[]): Promise<void> {
+export const MAX_TASKS = 20;
+
+/** Recurring jobs are keyed by label; one-offs by label and date. */
+export function taskKey(t: { label: string; date: string | null }): string {
+  return t.date ? `${t.label}@${t.date}` : t.label;
+}
+
+export async function saveKids(familyId: string, kids: KidInput[], now = new Date()): Promise<void> {
+  const family = await loadFamily(familyId);
+  const today = localDate(family.timezone, now);
   await prisma.$transaction(async (tx) => {
     const existing = await tx.kid.findMany({ where: { familyId }, include: { routines: { where: { archived: false }, include: { tasks: true } } } });
     const keep = new Set<string>();
@@ -315,16 +330,19 @@ export async function saveKids(familyId: string, kids: KidInput[]): Promise<void
         const routine = cur ? await tx.routine.update({ where: { id: cur.id }, data: rdata }) : await tx.routine.create({ data: { ...rdata, kidId: kid.id } });
         keepRoutines.add(routine.id);
 
-        const byLabel = new Map((cur?.tasks ?? []).map((t) => [t.label, t]));
-        const wanted = new Set(rin.tasks.map((t) => t.label));
+        const byKey = new Map((cur?.tasks ?? []).filter((t) => t.active).map((t) => [taskKey(t), t]));
+        const wanted = new Set(rin.tasks.map(taskKey));
         for (const [n, tin] of rin.tasks.entries()) {
-          const t = byLabel.get(tin.label);
+          const t = byKey.get(taskKey(tin));
           const tdata = { sortOrder: n, active: true, days: tin.days, date: tin.date };
           if (t) await tx.task.update({ where: { id: t.id }, data: tdata });
           else await tx.task.create({ data: { ...tdata, routineId: routine.id, label: tin.label } });
         }
+        // Past one-offs are not in the editor; leave them alone.
         for (const t of cur?.tasks ?? []) {
-          if (!wanted.has(t.label) && t.active) await tx.task.update({ where: { id: t.id }, data: { active: false } });
+          if (t.active && !wanted.has(taskKey(t)) && !(t.date && t.date < today)) {
+            await tx.task.update({ where: { id: t.id }, data: { active: false } });
+          }
         }
       }
       for (const r of current?.routines ?? []) {
@@ -339,15 +357,19 @@ export async function saveKids(familyId: string, kids: KidInput[]): Promise<void
 
 /** Add a one-off dated job to a routine (the Calendar tab's quick add). */
 export async function addOneOff(familyId: string, routineId: string, label: string, date: string): Promise<void> {
-  const routine = await prisma.routine.findFirst({ where: { id: routineId, archived: false, kid: { familyId, archived: false } }, include: { tasks: true } });
+  const routine = await prisma.routine.findFirst({ where: { id: routineId, archived: false, kid: { familyId, archived: false } }, include: { tasks: { where: { active: true } } } });
   if (!routine) throw new NotFoundError("routine");
-  const sortOrder = routine.tasks.length;
-  await prisma.task.create({ data: { routineId: routine.id, label, date, sortOrder } });
+  const live = routine.tasks.filter((t) => !t.date || t.date >= date);
+  if (live.some((t) => taskKey(t) === taskKey({ label, date }))) throw new BadRequestError(`${label} is already on ${date}`);
+  if (live.length >= MAX_TASKS) throw new BadRequestError(`${routine.name} already has ${MAX_TASKS} jobs`);
+  await prisma.task.create({ data: { routineId: routine.id, label, date, sortOrder: routine.tasks.length } });
 }
 
 /** Copy one kid's routines and jobs onto another kid; the target's own routines are archived. */
-export async function copyRoutines(familyId: string, fromKidId: string, toKidId: string): Promise<void> {
+export async function copyRoutines(familyId: string, fromKidId: string, toKidId: string, now = new Date()): Promise<void> {
   if (fromKidId === toKidId) throw new BadRequestError("same kid");
+  const family = await loadFamily(familyId);
+  const today = localDate(family.timezone, now);
   const from = await prisma.kid.findFirst({ where: { id: fromKidId, familyId }, include: { routines: { where: { archived: false }, orderBy: { sortOrder: "asc" }, include: { tasks: { where: { active: true }, orderBy: { sortOrder: "asc" } } } } } });
   const to = await kidInFamily(toKidId, familyId);
   if (!from) throw new NotFoundError("kid");
@@ -356,7 +378,7 @@ export async function copyRoutines(familyId: string, fromKidId: string, toKidId:
     for (const r of from.routines) {
       await tx.routine.create({ data: {
         kidId: to.id, name: r.name, startTime: r.startTime, endTime: r.endTime, days: r.days, bonus: r.bonus, streak: r.streak, sortOrder: r.sortOrder,
-        tasks: { create: r.tasks.map((t) => ({ label: t.label, days: t.days, date: t.date, sortOrder: t.sortOrder })) },
+        tasks: { create: r.tasks.filter((t) => !t.date || t.date >= today).map((t) => ({ label: t.label, days: t.days, date: t.date, sortOrder: t.sortOrder })) },
       } });
     }
   });

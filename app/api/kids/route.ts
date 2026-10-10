@@ -1,11 +1,11 @@
 import { BadRequestError, errorResponse, int, json, readJson, str } from "@/lib/api";
 import { requireFamily } from "@/lib/auth/guard";
 import { isDateString } from "@/lib/dates";
-import { loadFamily, saveKids, type KidInput, type RoutineInput, type TaskInput } from "@/lib/family";
+import { loadFamily, MAX_TASKS, saveKids, taskKey, type KidInput, type RoutineInput, type TaskInput } from "@/lib/family";
 import { requirePin } from "@/lib/pin";
 import { isColourKey, isTokenKey } from "@/lib/themes";
 
-const MAX_KIDS = 6, MAX_ROUTINES = 6, MAX_TASKS = 20;
+const MAX_KIDS = 6, MAX_ROUTINES = 6;
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function days(v: unknown): number[] {
@@ -39,7 +39,8 @@ function routine(raw: unknown): RoutineInput {
   if (endTime <= startTime) throw new BadRequestError(`${name}: end must be after start`);
   const tasksRaw = Array.isArray(r.tasks) ? r.tasks : [];
   const seen = new Set<string>();
-  const tasks = tasksRaw.map(task).filter((t) => (seen.has(t.label) ? false : (seen.add(t.label), true))).slice(0, MAX_TASKS);
+  const tasks = tasksRaw.map(task).filter((t) => (seen.has(taskKey(t)) ? false : (seen.add(taskKey(t)), true)));
+  if (tasks.length > MAX_TASKS) throw new BadRequestError(`${name}: at most ${MAX_TASKS} jobs per routine`);
   return { id: typeof r.id === "string" ? r.id : undefined, name, startTime, endTime, days: days(r.days), bonus: "bonus" in r ? int(r.bonus, 0, 50) : 2, streak: Boolean(r.streak), tasks };
 }
 

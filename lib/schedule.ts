@@ -13,8 +13,9 @@ export function isTaskScheduled(task: TaskLike, routine: RoutineLike, date: stri
   if (task.active === false) return false;
   if (task.date) return task.date === date;
   const w = weekdayOf(date);
-  const days = task.days.length ? task.days : routine.days;
-  return days.includes(w);
+  // A job's own days only narrow the routine's days, never extend them.
+  if (!routine.days.includes(w)) return false;
+  return task.days.length === 0 || task.days.includes(w);
 }
 
 /** A routine runs today if it is a routine day or it has a one-off job dated today. */
@@ -70,13 +71,15 @@ export function parseTaskLine(line: string, today: string): ParsedTask | null {
   return { label: trimmed, days: [], date: null };
 }
 
-export function formatDateSuffix(date: string): string {
-  const [, m, d] = date.split("-").map(Number);
-  return `${d} ${MONTHS[m - 1]}`;
+/** "14 Oct", or "14 Oct 2027" when the year is not `today`'s, so the line re-parses to the same date. */
+export function formatDateSuffix(date: string, today?: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const sameYear = today ? today.startsWith(String(y)) : true;
+  return `${d} ${MONTHS[m - 1]}${sameYear ? "" : ` ${y}`}`;
 }
 
-export function formatTaskLine(task: { label: string; days: number[]; date: string | null }): string {
-  if (task.date) return `${task.label} (${formatDateSuffix(task.date)})`;
+export function formatTaskLine(task: { label: string; days: number[]; date: string | null }, today?: string): string {
+  if (task.date) return `${task.label} (${formatDateSuffix(task.date, today)})`;
   if (task.days.length) return `${task.label} (${task.days.map((d) => DAY_NAMES[d]).join(", ")})`;
   return task.label;
 }

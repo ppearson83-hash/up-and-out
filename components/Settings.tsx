@@ -20,10 +20,10 @@ type Run = (label: string, fn: () => Promise<void>) => Promise<boolean>;
 
 const KIND_LABEL: Record<string, string> = { task: "Job", all_done: "On-time bonus", streak: "Streak bonus", claim: "Goal claimed", adjust: "Grown-up adjustment" };
 
-function toForm(k: KidState): KidForm {
+function toForm(k: KidState, today: string): KidForm {
   return {
     id: k.id, name: k.name, colour: k.colour, theme: k.theme, goalName: k.goalName, goalCost: k.goalCost,
-    routines: k.routines.map((r) => ({ id: r.id, name: r.name, startTime: r.startTime, endTime: r.endTime, days: r.days, bonus: r.bonus, streak: r.streak, tasks: r.allTasks.map(formatTaskLine).join("\n") })),
+    routines: k.routines.map((r) => ({ id: r.id, name: r.name, startTime: r.startTime, endTime: r.endTime, days: r.days, bonus: r.bonus, streak: r.streak, tasks: r.allTasks.map((t) => formatTaskLine(t, today)).join("\n") })),
   };
 }
 
@@ -93,7 +93,7 @@ function DaysPicker({ value, onChange }: { value: number[]; onChange: (days: num
 }
 
 function KidsTab({ state, busy, run }: { state: FamilyState; busy: boolean; run: Run }) {
-  const [forms, setForms] = useState<KidForm[]>(() => state.kids.map(toForm));
+  const [forms, setForms] = useState<KidForm[]>(() => state.kids.map((k) => toForm(k, state.today)));
   const update = (i: number, patch: Partial<KidForm>) => setForms((fs) => fs.map((k, j) => (j === i ? { ...k, ...patch } : k)));
   const updateR = (i: number, ri: number, patch: Partial<RoutineForm>) => setForms((fs) => fs.map((k, j) => (j !== i ? k : { ...k, routines: k.routines.map((r, n) => (n === ri ? { ...r, ...patch } : r)) })));
 
@@ -108,7 +108,7 @@ function KidsTab({ state, busy, run }: { state: FamilyState; busy: boolean; run:
 
   return (
     <form onSubmit={submit}>
-      <p className="hint">After a job, add <b>(Tue)</b> or <b>(Mon, Thu)</b> to limit it to those days, or <b>(14 Oct)</b> for a one-off on that date.</p>
+      <p className="hint">After a job, add <b>(Tue)</b> or <b>(Mon, Thu)</b> to limit it to those days (within the routine&apos;s days), or <b>(14 Oct)</b> for a one-off on that date. Up to 20 jobs per routine.</p>
       <div className="cols" style={{ marginTop: 10 }}>
         {forms.map((k, i) => (
           <div key={k.id ?? `new-${i}`} className="kidcard">

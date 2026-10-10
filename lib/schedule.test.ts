@@ -23,8 +23,15 @@ describe("parseTaskLine", () => {
   });
   it("round-trips through formatTaskLine", () => {
     for (const line of ["Brush teeth", "Swimming kit (Tue)", "Spellings (Mon, Thu)", "Dentist form (14 Oct)"]) {
-      expect(formatTaskLine(parseTaskLine(line, today)!)).toBe(line);
+      expect(formatTaskLine(parseTaskLine(line, today)!, today)).toBe(line);
     }
+  });
+  it("writes the year for a date outside this year so it re-parses unchanged", () => {
+    const line = formatTaskLine({ label: "Costume", days: [], date: "2027-03-03" }, today);
+    expect(line).toBe("Costume (3 Mar 2027)");
+    expect(parseTaskLine(line, today)).toEqual({ label: "Costume", days: [], date: "2027-03-03" });
+    const past = formatTaskLine({ label: "Old", days: [], date: "2025-11-02" }, today);
+    expect(parseTaskLine(past, today)?.date).toBe("2025-11-02");
   });
 });
 
@@ -34,6 +41,8 @@ describe("scheduling", () => {
     expect(isTaskScheduled({ days: [], date: null }, weekdays, "2026-10-10")).toBe(false);
     expect(isTaskScheduled({ days: [2], date: null }, weekdays, "2026-10-09")).toBe(false);
     expect(isTaskScheduled({ days: [5], date: null }, weekdays, "2026-10-09")).toBe(true);
+    // A job's days cannot add a day the routine does not run on.
+    expect(isTaskScheduled({ days: [6], date: null }, weekdays, "2026-10-10")).toBe(false);
     expect(isTaskScheduled({ days: [], date: "2026-10-10" }, weekdays, "2026-10-10")).toBe(true);
     expect(isTaskScheduled({ days: [], date: null, active: false }, weekdays, "2026-10-09")).toBe(false);
   });
