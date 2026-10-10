@@ -9,7 +9,17 @@ export type Entry = {
   date: string;
   kind: LedgerKind;
   amount: number;
+  routineId?: string | null;
 };
+
+/**
+ * The entries the day-streak is judged on: only the streak routine's
+ * all_done rows count as "finished that day". Everything else passes through
+ * so balances are unaffected.
+ */
+export function streakEntries(entries: Entry[], streakRoutineId: string | null): Entry[] {
+  return entries.filter((e) => e.kind !== "all_done" || (streakRoutineId !== null && e.routineId === streakRoutineId));
+}
 
 export type RewardRules = {
   tokenPerTask: number;

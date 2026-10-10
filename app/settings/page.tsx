@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { Settings } from "@/components/Settings";
 import { auth } from "@/lib/auth";
+import { NotFoundError } from "@/lib/errors";
 import { getState } from "@/lib/family";
 import { PIN_COOKIE, pinTokenValid } from "@/lib/pin";
 
@@ -12,7 +13,7 @@ export default async function SettingsPage() {
   const session = await auth();
   const familyId = session?.user?.familyId;
   if (!familyId) redirect("/login");
-  const state = await getState(familyId);
+  const state = await getState(familyId).catch((e: unknown) => { if (e instanceof NotFoundError) redirect("/signout"); throw e; });
   const jar = await cookies();
   const unlocked = !state.family.hasPin || pinTokenValid(jar.get(PIN_COOKIE)?.value, familyId);
   return <Settings initial={state} parentName={session?.user?.name ?? ""} unlocked={unlocked} />;

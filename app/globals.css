@@ -195,3 +195,28 @@ canvas.fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- routines ---------- */
+.routine { border: 2px solid var(--ksoft); border-radius: 18px; overflow: hidden; }
+.routine.live { border-color: var(--k); }
+.routine-head {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 0; cursor: pointer;
+  background: var(--ksoft); color: var(--ink); font: 800 1rem var(--body); text-align: left;
+}
+.routine.live .routine-head { background: var(--k); color: var(--tile-ink); }
+.routine-name { font-family: var(--display); font-weight: 700; font-size: 1.25rem; flex: 1; min-width: 0; }
+.routine-time { font-variant-numeric: tabular-nums; font-size: .85rem; opacity: .8; }
+.routine-head .count { color: inherit; }
+.chev { font-size: .9rem; opacity: .7; }
+.routine-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.routine.over:not(.open) .routine-head { opacity: .7; }
+.daygrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.daygrid > div { border: 2px solid var(--line); border-radius: 12px; padding: 6px; min-height: 90px; font-size: .78rem; }
+.daygrid b { display: block; font-family: var(--display); font-size: .9rem; margin-bottom: 4px; }
+.daygrid .today { border-color: var(--ink); }
+.daygrid .r { color: var(--muted); font-weight: 800; margin-top: 4px; }
+.daygrid .one { font-weight: 800; }
+.days { display: flex; gap: 4px; flex-wrap: wrap; }
+.days label { flex-direction: row; align-items: center; gap: 3px; font-size: .78rem; }
+.days input[type="checkbox"] { width: 18px; height: 18px; }
+@media (max-width: 760px) { .daygrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

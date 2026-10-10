@@ -49,7 +49,3 @@ export function iconFor(task: string): string {
   return ICONS.find(([re]) => re.test(task))?.[1] ?? "⭐";
 }
 
-export const DEFAULT_TASKS = [
-  "Get up", "Toilet", "Drink water", "Eat breakfast", "Brush teeth",
-  "Brush hair", "Shoes ready", "School bag", "Book bag",
-];

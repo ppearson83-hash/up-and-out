@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   balance, claimAmount, dailyTaskCap, earnedTodayFromTasks, goalProgress,
-  streak, streakBonusDue, type Entry, type RewardRules,
+  streak, streakBonusDue, streakEntries, type Entry, type RewardRules,
 } from "./engine";
 
 const rules: RewardRules = {
@@ -100,5 +100,18 @@ describe("caps and claims", () => {
     expect(claimAmount([e("2026-10-05", "task", 20)], 20)).toBe(-20);
     expect(claimAmount([e("2026-10-05", "task", 19)], 20)).toBeNull();
     expect(claimAmount([e("2026-10-05", "task", 19)], 0)).toBeNull();
+  });
+});
+
+describe("streakEntries", () => {
+  it("counts only the streak routine's finished days", () => {
+    const entries: Entry[] = [
+      { ...e("2026-10-05", "all_done", 3), routineId: "morning" },
+      { ...e("2026-10-06", "all_done", 2), routineId: "bedtime" },
+      { ...e("2026-10-06", "task", 1), routineId: "bedtime" },
+    ];
+    expect(streak(streakEntries(entries, "morning"), "2026-10-06", rules)).toBe(1);
+    expect(balance(streakEntries(entries, "morning"))).toBe(4);
+    expect(streak(streakEntries(entries, null), "2026-10-06", rules)).toBe(0);
   });
 });

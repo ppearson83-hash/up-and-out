@@ -1,9 +1,9 @@
 # Up and Out
 
-Kids' morning routine board with rewards. Parents sign in; a kitchen tablet shows the
-kids' job tiles and a countdown to leaving for school; every job earns a token
-(star, dinosaur, …) towards a goal the parent sets. Multi-device: every device polls
-the API, so phone and tablet stay in step.
+Kids' routine board with rewards. Parents sign in; a kitchen tablet shows each kid's
+routines for today (Morning, After school, Bedtime, …) as job tiles with a countdown
+ring; every job earns a token (star, dinosaur, …) towards a goal the parent sets.
+Multi-device: every device polls the API, so phone and tablet stay in step.
 
 ## Stack
 
@@ -37,6 +37,15 @@ Git push only: branch push = preview, `main` = production. `vercel.json` runs
   derived, never stored. Undo deletes the entry.
 - Every `app/api/**` handler calls `requireFamily()` first; settings, claim and adjust
   routes also call `requirePin()`.
+- Jobs belong to a `Routine` (time window, weekdays, on-time bonus); one routine per kid
+  has `streak = true` and is the only one the day-streak counts. A job's own `days` or
+  `date` narrow when it appears (`lib/schedule.ts`; parents type `(Tue)` / `(14 Oct)`).
+- Kids, routines and jobs are archived or deactivated, never deleted: ledger rows cascade.
+- Embedded `prisma dev` serves database `template1`, so `prisma migrate dev` cannot make a
+  shadow DB. Write migrations by hand: diff with `prisma migrate diff
+  --from-config-datasource --to-schema prisma/schema.prisma --script` (DATABASE_URL from
+  `scripts/embedded-db.mjs`), add data moves, rehearse with `prisma migrate deploy`.
+  Reset the instance with `npx prisma dev rm up-and-out --force`.
 - Dates are the family's **local date** (`YYYY-MM-DD` in `Family.timezone`), computed
   server-side in `lib/dates.ts`. Never `new Date().toISOString().slice(0,10)`.
 - No new dependencies without asking.

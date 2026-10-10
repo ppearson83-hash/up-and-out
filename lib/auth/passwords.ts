@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 
 import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { DEFAULT_TASKS } from "@/lib/themes";
+import { defaultRoutines } from "@/lib/family";
 
 export type AuthUser = { id: string; email: string; name: string; familyId: string };
 
@@ -21,6 +21,13 @@ export class SignupError extends Error {
 export const MIN_PASSWORD_LENGTH = 8;
 const EMAIL_SHAPE = /^\S+@\S+\.\S+$/;
 const BCRYPT_ROUNDS = 10;
+
+function routinesCreate() {
+  return defaultRoutines().map((r, i) => ({
+    name: r.name, startTime: r.startTime, endTime: r.endTime, days: r.days, bonus: r.bonus, streak: r.streak, sortOrder: i,
+    tasks: { create: r.tasks.map((t, n) => ({ label: t.label, days: t.days, date: t.date, sortOrder: n })) },
+  }));
+}
 
 function inviteCode(): string {
   // 8 chars, no ambiguous letters, easy to read out across the kitchen.
@@ -59,10 +66,8 @@ export async function createUser(input: {
             inviteCode: inviteCode(),
             kids: {
               create: [
-                { name: "Kid 1", colour: "marigold", theme: "star", sortOrder: 0,
-                  tasks: { create: DEFAULT_TASKS.map((label, i) => ({ label, sortOrder: i })) } },
-                { name: "Kid 2", colour: "seaglass", theme: "dino", sortOrder: 1,
-                  tasks: { create: DEFAULT_TASKS.map((label, i) => ({ label, sortOrder: i })) } },
+                { name: "Kid 1", colour: "marigold", theme: "star", sortOrder: 0, routines: { create: routinesCreate() } },
+                { name: "Kid 2", colour: "seaglass", theme: "dino", sortOrder: 1, routines: { create: routinesCreate() } },
               ],
             },
           },

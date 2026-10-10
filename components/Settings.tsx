@@ -4,22 +4,36 @@ import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useCallback, useState } from "react";
 
-import { api, ApiError, type FamilyState } from "@/lib/client";
+import { api, ApiError, fmtTime, type FamilyState } from "@/lib/client";
+import { hhmmToMinutes } from "@/lib/dates";
+import { DAY_NAMES, dateRange, formatDateSuffix, formatTaskLine, isTaskScheduled, parseTaskLine } from "@/lib/schedule";
 import { COLOUR_KEYS, COLOURS, TOKEN_KEYS, TOKENS, tokenLabel } from "@/lib/themes";
 
 import { PinPad } from "./PinPad";
 
-type Tab = "times" | "kids" | "rewards" | "family";
-type KidForm = { id?: string; name: string; colour: string; theme: string; goalName: string; goalCost: number; tasks: string };
-type HistoryRow = { id: string; date: string; kind: string; amount: number; note: string; createdAt: string };
+type Tab = "kids" | "calendar" | "rewards" | "family";
+type KidState = FamilyState["kids"][number];
+type RoutineForm = { id?: string; name: string; startTime: string; endTime: string; days: number[]; bonus: number; streak: boolean; tasks: string };
+type KidForm = { id?: string; name: string; colour: string; theme: string; goalName: string; goalCost: number; routines: RoutineForm[] };
+type HistoryRow = { id: string; date: string; kind: string; amount: number; note: string; routine: string | null; createdAt: string };
+type Run = (label: string, fn: () => Promise<void>) => Promise<boolean>;
 
-const KIND_LABEL: Record<string, string> = { task: "Job", all_done: "All done bonus", streak: "Streak bonus", claim: "Goal claimed", adjust: "Grown-up adjustment" };
+const KIND_LABEL: Record<string, string> = { task: "Job", all_done: "On-time bonus", streak: "Streak bonus", claim: "Goal claimed", adjust: "Grown-up adjustment" };
+
+function toForm(k: KidState): KidForm {
+  return {
+    id: k.id, name: k.name, colour: k.colour, theme: k.theme, goalName: k.goalName, goalCost: k.goalCost,
+    routines: k.routines.map((r) => ({ id: r.id, name: r.name, startTime: r.startTime, endTime: r.endTime, days: r.days, bonus: r.bonus, streak: r.streak, tasks: r.allTasks.map(formatTaskLine).join("\n") })),
+  };
+}
+
+const NEW_ROUTINE: RoutineForm = { name: "Evening", startTime: "17:00", endTime: "18:30", days: [1, 2, 3, 4, 5], bonus: 2, streak: false, tasks: "Homework\nRead a book" };
 
 export function Settings({ initial, parentName, unlocked: initiallyUnlocked }: { initial: FamilyState; parentName: string; unlocked: boolean }) {
   const router = useRouter();
   const [state, setState] = useState(initial);
   const [unlocked, setUnlocked] = useState(initiallyUnlocked);
-  const [tab, setTab] = useState<Tab>("times");
+  const [tab, setTab] = useState<Tab>("kids");
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,7 +41,7 @@ export function Settings({ initial, parentName, unlocked: initiallyUnlocked }: {
   const refresh = useCallback(async () => { setState(await api<FamilyState>("/api/state")); }, []);
   function say(msg: string) { setToast(msg); setTimeout(() => setToast(""), 2000); }
 
-  async function run(label: string, fn: () => Promise<void>) {
+  const run: Run = async (label, fn) => {
     setBusy(true); setError("");
     try { await fn(); await refresh(); say(label); return true; }
     catch (e) {
@@ -35,14 +49,10 @@ export function Settings({ initial, parentName, unlocked: initiallyUnlocked }: {
       setError(e instanceof ApiError ? e.message || "That did not work" : "That did not work");
       return false;
     } finally { setBusy(false); }
-  }
+  };
 
   if (!unlocked) {
-    return (
-      <div className="auth">
-        <PinPad title="Grown-ups" onUnlocked={() => setUnlocked(true)} onCancel={() => router.push("/board")} />
-      </div>
-    );
+    return <div className="auth"><PinPad title="Grown-ups" onUnlocked={() => setUnlocked(true)} onCancel={() => router.push("/board")} /></div>;
   }
 
   const f = state.family;
@@ -53,16 +63,16 @@ export function Settings({ initial, parentName, unlocked: initiallyUnlocked }: {
         <Link className="btn" href="/board">← Board</Link>
       </div>
       <div className="tabs" role="tablist">
-        {(["times", "kids", "rewards", "family"] as Tab[]).map((t) => (
+        {(["kids", "calendar", "rewards", "family"] as Tab[]).map((t) => (
           <button key={t} type="button" role="tab" className="btn small" aria-selected={tab === t} onClick={() => { setTab(t); setError(""); }}>
-            {{ times: "Times", kids: "Kids and jobs", rewards: "Rewards", family: "Family" }[t]}
+            {{ kids: "Kids and routines", calendar: "Calendar", rewards: "Rewards", family: "Family" }[t]}
           </button>
         ))}
       </div>
       {error && <p className="error">{error}</p>}
 
-      {tab === "times" && <TimesTab f={f} busy={busy} onSave={(patch) => run("Saved", () => api("/api/family", { method: "PUT", json: patch }).then(() => undefined))} />}
-      {tab === "kids" && <KidsTab key={state.kids.map((k) => k.id).join(",")} kids={state.kids} busy={busy} onSave={(kids) => run("Saved", () => api("/api/kids", { method: "PUT", json: { kids } }).then(() => undefined))} />}
+      {tab === "kids" && <KidsTab key={state.kids.map((k) => k.id + k.routines.map((r) => r.id).join()).join(",")} state={state} busy={busy} run={run} />}
+      {tab === "calendar" && <CalendarTab state={state} busy={busy} run={run} />}
       {tab === "rewards" && <RewardsTab state={state} busy={busy} run={run} />}
       {tab === "family" && <FamilyTab f={f} parentName={parentName} busy={busy} run={run} />}
 
@@ -71,29 +81,35 @@ export function Settings({ initial, parentName, unlocked: initiallyUnlocked }: {
   );
 }
 
-function TimesTab({ f, busy, onSave }: { f: FamilyState["family"]; busy: boolean; onSave: (patch: Record<string, unknown>) => Promise<boolean> }) {
+function DaysPicker({ value, onChange }: { value: number[]; onChange: (days: number[]) => void }) {
+  const order = [1, 2, 3, 4, 5, 6, 0];
   return (
-    <form onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); void onSave({
-      startTime: d.get("startTime"), leaveTime: d.get("leaveTime"), timezone: d.get("timezone"), schoolDaysOnly: d.get("schoolDaysOnly") === "on",
-    }); }}>
-      <div className="times">
-        <label>Morning starts<input name="startTime" type="time" defaultValue={f.startTime} required /></label>
-        <label>Leave for school<input name="leaveTime" type="time" defaultValue={f.leaveTime} required /></label>
-      </div>
-      <label style={{ marginTop: 12 }}>Timezone<input name="timezone" defaultValue={f.timezone} required /></label>
-      <label className="row" style={{ marginTop: 12 }}><input name="schoolDaysOnly" type="checkbox" defaultChecked={f.schoolDaysOnly} />Streaks count school days only (weekends do not break a streak)</label>
-      <div className="actions" style={{ marginTop: 16 }}><button className="btn primary" type="submit" disabled={busy}>Save</button></div>
-    </form>
+    <div className="days" role="group" aria-label="Days">
+      {order.map((d) => (
+        <label key={d}><input type="checkbox" checked={value.includes(d)} onChange={(e) => onChange(e.target.checked ? [...new Set([...value, d])].sort() : value.filter((x) => x !== d))} />{DAY_NAMES[d]}</label>
+      ))}
+    </div>
   );
 }
 
-function KidsTab({ kids, busy, onSave }: { kids: FamilyState["kids"]; busy: boolean; onSave: (kids: Omit<KidForm, "tasks">[] & { tasks: string[] }[]) => Promise<boolean> }) {
-  const [forms, setForms] = useState<KidForm[]>(() => kids.map((k) => ({ id: k.id, name: k.name, colour: k.colour, theme: k.theme, goalName: k.goalName, goalCost: k.goalCost, tasks: k.tasks.map((t) => t.label).join("\n") })));
+function KidsTab({ state, busy, run }: { state: FamilyState; busy: boolean; run: Run }) {
+  const [forms, setForms] = useState<KidForm[]>(() => state.kids.map(toForm));
   const update = (i: number, patch: Partial<KidForm>) => setForms((fs) => fs.map((k, j) => (j === i ? { ...k, ...patch } : k)));
+  const updateR = (i: number, ri: number, patch: Partial<RoutineForm>) => setForms((fs) => fs.map((k, j) => (j !== i ? k : { ...k, routines: k.routines.map((r, n) => (n === ri ? { ...r, ...patch } : r)) })));
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const kids = forms.map((k) => ({
+      ...k,
+      routines: k.routines.map((r) => ({ ...r, tasks: r.tasks.split("\n").map((line) => parseTaskLine(line, state.today)).filter(Boolean) })),
+    }));
+    void run("Saved", () => api("/api/kids", { method: "PUT", json: { kids } }).then(() => undefined));
+  }
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); void onSave(forms.map((k) => ({ ...k, tasks: k.tasks.split("\n").map((s) => s.trim()).filter(Boolean) }))); }}>
-      <div className="cols">
+    <form onSubmit={submit}>
+      <p className="hint">After a job, add <b>(Tue)</b> or <b>(Mon, Thu)</b> to limit it to those days, or <b>(14 Oct)</b> for a one-off on that date.</p>
+      <div className="cols" style={{ marginTop: 10 }}>
         {forms.map((k, i) => (
           <div key={k.id ?? `new-${i}`} className="kidcard">
             <header>
@@ -109,13 +125,36 @@ function KidsTab({ kids, busy, onSave }: { kids: FamilyState["kids"]; busy: bool
               <label>Saving for<input value={k.goalName} maxLength={40} placeholder="Trip to the park" onChange={(e) => update(i, { goalName: e.target.value })} /></label>
               <label>Goal costs<input type="number" required min={0} max={1000} value={k.goalCost} onChange={(e) => update(i, { goalCost: Number(e.target.value) })} /></label>
             </div>
-            <label>Jobs, one per line<textarea value={k.tasks} onChange={(e) => update(i, { tasks: e.target.value })} /></label>
             <span style={{ display: "inline-block", width: 24, height: 24, borderRadius: 8, background: COLOURS[k.colour as keyof typeof COLOURS]?.k ?? "#ccc" }} aria-hidden="true" />
+
+            {k.routines.map((r, ri) => (
+              <div key={r.id ?? `new-${ri}`} className="kidcard" style={{ padding: 10 }}>
+                <header>
+                  <h3 style={{ fontSize: "1rem" }}>{r.name || "Routine"}</h3>
+                  <label className="row" style={{ fontSize: ".75rem" }}><input type="radio" name={`streak-${i}`} checked={r.streak} onChange={() => setForms((fs) => fs.map((kk, j) => (j !== i ? kk : { ...kk, routines: kk.routines.map((rr, n) => ({ ...rr, streak: n === ri })) })))} />counts for streak</label>
+                  <button type="button" className="btn small danger" disabled={k.routines.length <= 1} onClick={() => update(i, { routines: k.routines.filter((_, n) => n !== ri) })}>Remove</button>
+                </header>
+                <label>Routine name<input value={r.name} maxLength={30} required onChange={(e) => updateR(i, ri, { name: e.target.value })} /></label>
+                <div className="times">
+                  <label>Starts<input type="time" value={r.startTime} required onChange={(e) => updateR(i, ri, { startTime: e.target.value })} /></label>
+                  <label>Finish by<input type="time" value={r.endTime} required onChange={(e) => updateR(i, ri, { endTime: e.target.value })} /></label>
+                </div>
+                <DaysPicker value={r.days} onChange={(days) => updateR(i, ri, { days })} />
+                <label>Bonus for finishing on time<input type="number" required min={0} max={50} value={r.bonus} onChange={(e) => updateR(i, ri, { bonus: Number(e.target.value) })} style={{ width: 100 }} /></label>
+                <label>Jobs, one per line<textarea value={r.tasks} style={{ minHeight: 120 }} onChange={(e) => updateR(i, ri, { tasks: e.target.value })} /></label>
+              </div>
+            ))}
+            <div className="actions">
+              <button type="button" className="btn small left" disabled={k.routines.length >= 6} onClick={() => update(i, { routines: [...k.routines, { ...NEW_ROUTINE }] })}>+ Add a routine</button>
+              {state.kids.filter((o) => o.id !== k.id).map((o) => k.id && (
+                <button key={o.id} type="button" className="btn small" disabled={busy} onClick={() => { if (confirm(`Replace ${o.name}'s routines with ${k.name}'s?`)) void run(`Copied to ${o.name}`, () => api(`/api/kids/${k.id}/copy-routines`, { json: { toKidId: o.id } }).then(() => undefined)); }}>Copy to {o.name}</button>
+              ))}
+            </div>
           </div>
         ))}
       </div>
       <div className="actions" style={{ marginTop: 16 }}>
-        <button type="button" className="btn left" disabled={forms.length >= 6} onClick={() => setForms((fs) => [...fs, { name: "", colour: COLOUR_KEYS[fs.length % COLOUR_KEYS.length], theme: TOKEN_KEYS[fs.length % TOKEN_KEYS.length], goalName: "", goalCost: 20, tasks: "Get up\nBrush teeth" }])}>+ Add a kid</button>
+        <button type="button" className="btn left" disabled={forms.length >= 6} onClick={() => setForms((fs) => [...fs, { name: "", colour: COLOUR_KEYS[fs.length % COLOUR_KEYS.length], theme: TOKEN_KEYS[fs.length % TOKEN_KEYS.length], goalName: "", goalCost: 20, routines: [{ name: "Morning", startTime: "07:00", endTime: "08:15", days: [1, 2, 3, 4, 5], bonus: 3, streak: true, tasks: "Get up\nBrush teeth" }] }])}>+ Add a kid</button>
         <button className="btn primary" type="submit" disabled={busy}>Save</button>
       </div>
       <p className="hint" style={{ marginTop: 8 }}>Removing a kid hides them and keeps their history. Renaming a job resets today&apos;s tick for it.</p>
@@ -123,7 +162,56 @@ function KidsTab({ kids, busy, onSave }: { kids: FamilyState["kids"]; busy: bool
   );
 }
 
-function RewardsTab({ state, busy, run }: { state: FamilyState; busy: boolean; run: (label: string, fn: () => Promise<void>) => Promise<boolean> }) {
+function CalendarTab({ state, busy, run }: { state: FamilyState; busy: boolean; run: Run }) {
+  const days = dateRange(state.today, 7);
+  const [kidId, setKidId] = useState(state.kids[0]?.id ?? "");
+  const kid = state.kids.find((k) => k.id === kidId) ?? state.kids[0];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {state.kids.map((k) => (
+        <div key={k.id}>
+          <h3>{k.name}</h3>
+          <div className="daygrid" style={{ marginTop: 8 }}>
+            {days.map((d) => {
+              const [, , dd] = d.split("-");
+              const w = new Date(`${d}T12:00:00`).getDay();
+              return (
+                <div key={d} className={d === state.today ? "today" : ""}>
+                  <b>{DAY_NAMES[w]} {Number(dd)}</b>
+                  {k.routines.map((r) => {
+                    const jobs = r.allTasks.filter((t) => isTaskScheduled({ days: t.days, date: t.date }, r, d));
+                    if (!jobs.length) return null;
+                    return (
+                      <div key={r.id}>
+                        <div className="r">{r.name} · {fmtTime(hhmmToMinutes(r.startTime))}</div>
+                        {jobs.map((t) => <div key={t.id} className={t.date ? "one" : ""}>{t.date ? "📌 " : ""}{t.label}</div>)}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <form onSubmit={(e) => { e.preventDefault(); const form = e.currentTarget; const d = new FormData(form); void run("Added", () => api("/api/tasks", { json: { routineId: d.get("routineId"), label: d.get("label"), date: d.get("date") } }).then(() => { form.reset(); })); }}>
+        <h3>Add a one-off job</h3>
+        <div className="times" style={{ marginTop: 8 }}>
+          <label>Kid<select value={kidId} onChange={(e) => setKidId(e.target.value)}>{state.kids.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}</select></label>
+          <label>Routine<select name="routineId" required>{kid?.routines.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
+        </div>
+        <div className="times" style={{ marginTop: 10 }}>
+          <label>Job<input name="label" maxLength={40} required placeholder="Dentist form" /></label>
+          <label>Date<input name="date" type="date" required min={state.today} /></label>
+        </div>
+        <div className="actions" style={{ marginTop: 10 }}><button className="btn primary" type="submit" disabled={busy}>Add</button></div>
+        <p className="hint">One-offs also appear in the routine&apos;s job list as, for example, &quot;Dentist form ({formatDateSuffix(state.today)})&quot;, where you can remove them.</p>
+      </form>
+    </div>
+  );
+}
+
+function RewardsTab({ state, busy, run }: { state: FamilyState; busy: boolean; run: Run }) {
   const f = state.family;
   const [histFor, setHistFor] = useState<string | null>(null);
   const [rows, setRows] = useState<HistoryRow[]>([]);
@@ -134,13 +222,14 @@ function RewardsTab({ state, busy, run }: { state: FamilyState; busy: boolean; r
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <form onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); void run("Saved", () => api("/api/family", { method: "PUT", json: {
-        tokenPerTask: Number(d.get("tokenPerTask")), allDoneBonus: Number(d.get("allDoneBonus")), streakLength: Number(d.get("streakLength")), streakBonus: Number(d.get("streakBonus")),
+        tokenPerTask: Number(d.get("tokenPerTask")), streakLength: Number(d.get("streakLength")), streakBonus: Number(d.get("streakBonus")), schoolDaysOnly: d.get("schoolDaysOnly") === "on",
       } }).then(() => undefined)); }}>
         <h3>Rules</h3>
+        <p className="hint">The bonus for finishing a routine on time is set per routine under Kids and routines.</p>
         <div className="cols" style={{ marginTop: 8 }}>
           <div>
             <label>Tokens per job<input name="tokenPerTask" type="number" required min={0} max={10} defaultValue={f.tokenPerTask} /></label>
-            <label>Bonus for everything done before leaving time<input name="allDoneBonus" type="number" required min={0} max={50} defaultValue={f.allDoneBonus} /></label>
+            <label className="row"><input name="schoolDaysOnly" type="checkbox" defaultChecked={f.schoolDaysOnly} />Streaks count school days only</label>
           </div>
           <div>
             <label>Streak length (days in a row)<input name="streakLength" type="number" required min={0} max={30} defaultValue={f.streakLength} /></label>
@@ -174,7 +263,7 @@ function RewardsTab({ state, busy, run }: { state: FamilyState; busy: boolean; r
                 {rows.map((r) => (
                   <tr key={r.id}>
                     <td>{r.date}</td>
-                    <td>{KIND_LABEL[r.kind] ?? r.kind}{r.note ? ` · ${r.note}` : ""}</td>
+                    <td>{KIND_LABEL[r.kind] ?? r.kind}{r.routine ? ` · ${r.routine}` : ""}{r.note ? ` · ${r.note}` : ""}</td>
                     <td className={`amt${r.amount < 0 ? " neg" : ""}`}>{r.amount > 0 ? `+${r.amount}` : r.amount}</td>
                   </tr>
                 ))}
@@ -187,12 +276,15 @@ function RewardsTab({ state, busy, run }: { state: FamilyState; busy: boolean; r
   );
 }
 
-function FamilyTab({ f, parentName, busy, run }: { f: FamilyState["family"]; parentName: string; busy: boolean; run: (label: string, fn: () => Promise<void>) => Promise<boolean> }) {
+function FamilyTab({ f, parentName, busy, run }: { f: FamilyState["family"]; parentName: string; busy: boolean; run: Run }) {
   const router = useRouter();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <form onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); void run("Saved", () => api("/api/family", { method: "PUT", json: { name: d.get("name") } }).then(() => undefined)); }}>
-        <label>Family name<input name="name" defaultValue={f.name} maxLength={40} /></label>
+      <form onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); void run("Saved", () => api("/api/family", { method: "PUT", json: { name: d.get("name"), timezone: d.get("timezone") } }).then(() => undefined)); }}>
+        <div className="times">
+          <label>Family name<input name="name" defaultValue={f.name} maxLength={40} /></label>
+          <label>Timezone<input name="timezone" defaultValue={f.timezone} required /></label>
+        </div>
         <div className="actions" style={{ marginTop: 8 }}><button className="btn primary" type="submit" disabled={busy}>Save</button></div>
       </form>
       <div>

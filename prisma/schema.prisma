@@ -31,13 +31,10 @@ model Family {
   // Second parent joins by entering this code at signup.
   inviteCode     String  @unique
   timezone       String  @default("Europe/London")
-  startTime      String  @default("07:00") // HH:MM local
-  leaveTime      String  @default("08:15")
   schoolDaysOnly Boolean @default(true)
-  // Reward tuning. Tokens per job, bonus for everything done before leave
-  // time, and the streak length that earns a streak bonus.
+  // Reward tuning. Tokens per job and the streak length that earns a streak
+  // bonus. The on-time bonus lives on each Routine.
   tokenPerTask   Int     @default(1)
-  allDoneBonus   Int     @default(3)
   streakLength   Int     @default(5)
   streakBonus    Int     @default(5)
   createdAt      DateTime @default(now())
@@ -61,22 +58,51 @@ model Kid {
   archived  Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  tasks       Task[]
+  routines    Routine[]
   completions Completion[]
   ledger      LedgerEntry[]
 }
 
-model Task {
+// A block of jobs with a time window and the weekdays it runs on, e.g.
+// Morning 07:00-08:15 Mon-Fri. Finishing every scheduled job before endTime
+// earns `bonus`. Exactly one routine per kid should have `streak` set: that
+// is the one the day-streak counts.
+model Routine {
   id        String  @id @default(cuid())
   kidId     String
   kid       Kid     @relation(fields: [kidId], references: [id], onDelete: Cascade)
+  name      String
+  startTime String  @default("07:00") // HH:MM local
+  endTime   String  @default("08:15")
+  // Weekdays 0 (Sunday) to 6 (Saturday).
+  days      Int[]   @default([1, 2, 3, 4, 5])
+  bonus     Int     @default(3)
+  streak    Boolean @default(false)
+  sortOrder Int     @default(0)
+  // Removed routines are archived, never deleted: their ledger rows must survive.
+  archived  Boolean @default(false)
+
+  tasks  Task[]
+  ledger LedgerEntry[]
+
+  @@index([kidId, sortOrder])
+}
+
+model Task {
+  id        String  @id @default(cuid())
+  routineId String
+  routine   Routine @relation(fields: [routineId], references: [id], onDelete: Cascade)
   label     String
+  // Empty = every day the routine runs; otherwise only these weekdays.
+  days      Int[]   @default([])
+  // Set for a one-off job on one date (YYYY-MM-DD); days is then ignored.
+  date      String?
   sortOrder Int     @default(0)
   active    Boolean @default(true)
 
   completions Completion[]
 
-  @@index([kidId, sortOrder])
+  @@index([routineId, sortOrder])
 }
 
 // One row per kid, task and family-local date (YYYY-MM-DD).
@@ -114,6 +140,9 @@ model LedgerEntry {
   // Set for kind=task so undo can find and delete the matching entry.
   completionId String?     @unique
   completion   Completion? @relation(fields: [completionId], references: [id], onDelete: Cascade)
+  // Set for task / all_done / streak entries: which routine earned it.
+  routineId    String?
+  routine      Routine?    @relation(fields: [routineId], references: [id], onDelete: SetNull)
   createdAt    DateTime    @default(now())
 
   @@index([kidId, date])
