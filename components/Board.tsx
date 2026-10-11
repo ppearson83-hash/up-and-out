@@ -13,9 +13,14 @@ type KidState = FamilyState["kids"][number];
 type RoutineState = KidState["routines"][number];
 const POLL_MS = 10_000;
 
+/** Routines drawn on the board today: scheduled and with at least one job. */
+function todaysRoutines(routines: RoutineState[]): RoutineState[] {
+  return routines.filter((r) => r.scheduled && r.tasks.length > 0);
+}
+
 /** The routine the clock ring follows: the live one, else the next up today, else null. */
 function currentRoutine(routines: RoutineState[]): RoutineState | null {
-  const todays = routines.filter((r) => r.scheduled);
+  const todays = todaysRoutines(routines);
   return todays.find((r) => r.status === "live") ?? todays.find((r) => r.status === "upcoming") ?? null;
 }
 
@@ -102,7 +107,7 @@ export function Board({ initial }: { initial: FamilyState }) {
 
   // The ring follows the first kid's current routine; kids usually share times.
   const lead = state.kids.map((k) => currentRoutine(k.routines)).find(Boolean) ?? null;
-  const anyLeft = state.kids.some((k) => k.routines.some((r) => r.scheduled && !r.allDone && r.tasks.length > 0));
+  const anyLeft = state.kids.some((k) => todaysRoutines(k.routines).some((r) => !r.allDone));
   let ringClass = "ring", big = "", small = "", p = 0;
   if (lead) {
     const s = hhmmToMinutes(lead.startTime), e = hhmmToMinutes(lead.endTime);
@@ -147,7 +152,7 @@ export function Board({ initial }: { initial: FamilyState }) {
       <main className="board">
         {state.kids.map((kid) => {
           const tok = TOKENS[isTokenKey(kid.theme) ? kid.theme : "star"];
-          const todays = kid.routines.filter((r) => r.scheduled && r.tasks.length > 0);
+          const todays = todaysRoutines(kid.routines);
           const current = currentRoutine(kid.routines);
           const total = todays.reduce((n, r) => n + r.tasks.length, 0);
           const done = todays.reduce((n, r) => n + r.doneCount, 0);

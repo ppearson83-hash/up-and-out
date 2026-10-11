@@ -195,11 +195,14 @@ export async function completeTask(familyId: string, kidId: string, taskId: stri
     let bonus = 0, streakBonus = 0;
     if (allDone) {
       const alreadyDone = await tx.ledgerEntry.findFirst({ where: { kidId: kid.id, date: today, kind: "all_done", routineId: routine.id } });
-      // The all_done row is the streak record, so it is written even when the
-      // routine's bonus is 0; only the amount depends on the setting.
-      const inWindow = nowM >= hhmmToMinutes(routine.startTime) && nowM < hhmmToMinutes(routine.endTime);
-      if (!alreadyDone && inWindow) {
-        bonus = Math.max(0, routine.bonus);
+      // The all_done row is the streak record: any finish before the end time
+      // counts as a finished day (an early riser keeps the streak). The bonus
+      // itself is only paid inside the routine's window, so bedtime jobs done
+      // at breakfast earn tokens but not the bedtime bonus.
+      const beforeEnd = nowM < hhmmToMinutes(routine.endTime);
+      const inWindow = beforeEnd && nowM >= hhmmToMinutes(routine.startTime);
+      if (!alreadyDone && beforeEnd) {
+        bonus = inWindow ? Math.max(0, routine.bonus) : 0;
         await tx.ledgerEntry.create({ data: { kidId: kid.id, date: today, kind: "all_done", amount: bonus, note: `${routine.name} done on time`, routineId: routine.id } });
         if (routine.streak) {
           const ledgerNow = await tx.ledgerEntry.findMany({ where: { kidId: kid.id }, select: { date: true, kind: true, amount: true, routineId: true } });
@@ -330,7 +333,10 @@ export async function saveKids(familyId: string, kids: KidInput[], now = new Dat
         const routine = cur ? await tx.routine.update({ where: { id: cur.id }, data: rdata }) : await tx.routine.create({ data: { ...rdata, kidId: kid.id } });
         keepRoutines.add(routine.id);
 
-        const byKey = new Map((cur?.tasks ?? []).filter((t) => t.active).map((t) => [taskKey(t), t]));
+        // Prefer the active row for a key; fall back to the newest inactive one so a
+        // job deleted by mistake and put back keeps its id and today's tick.
+        const byKey = new Map<string, (typeof existing)[number]["routines"][number]["tasks"][number]>();
+        for (const t of [...(cur?.tasks ?? [])].sort((a, b) => Number(a.active) - Number(b.active) || a.sortOrder - b.sortOrder)) byKey.set(taskKey(t), t);
         const wanted = new Set(rin.tasks.map(taskKey));
         for (const [n, tin] of rin.tasks.entries()) {
           const t = byKey.get(taskKey(tin));
@@ -356,11 +362,14 @@ export async function saveKids(familyId: string, kids: KidInput[], now = new Dat
 }
 
 /** Add a one-off dated job to a routine (the Calendar tab's quick add). */
-export async function addOneOff(familyId: string, routineId: string, label: string, date: string): Promise<void> {
+export async function addOneOff(familyId: string, routineId: string, label: string, date: string, now = new Date()): Promise<void> {
+  const family = await loadFamily(familyId);
+  const today = localDate(family.timezone, now);
   const routine = await prisma.routine.findFirst({ where: { id: routineId, archived: false, kid: { familyId, archived: false } }, include: { tasks: { where: { active: true } } } });
   if (!routine) throw new NotFoundError("routine");
-  const live = routine.tasks.filter((t) => !t.date || t.date >= date);
-  if (live.some((t) => taskKey(t) === taskKey({ label, date }))) throw new BadRequestError(`${label} is already on ${date}`);
+  if (routine.tasks.some((t) => taskKey(t) === taskKey({ label, date }))) throw new BadRequestError(`${label} is already on ${date}`);
+  // Same count as the editor: recurring jobs plus one-offs from today on.
+  const live = routine.tasks.filter((t) => !t.date || t.date >= today);
   if (live.length >= MAX_TASKS) throw new BadRequestError(`${routine.name} already has ${MAX_TASKS} jobs`);
   await prisma.task.create({ data: { routineId: routine.id, label, date, sortOrder: routine.tasks.length } });
 }

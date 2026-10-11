@@ -122,7 +122,7 @@ describe.skipIf(!hasDb)("completeTask flow", () => {
     expect(kid.balance).toBe(1);
   });
 
-  it("pays no bonus before the routine starts, and undo survives a rename", async () => {
+  it("counts an early finish for the streak but pays no bonus, and undo survives a rename", async () => {
     const { completeTask, getState, saveKids, undoLast } = await import("@/lib/family");
     // Wednesday 07 Oct, 05:00Z = 06:00 London, before Morning starts at 07:00.
     const d = "07";
@@ -130,7 +130,8 @@ describe.skipIf(!hasDb)("completeTask flow", () => {
     await completeTask(familyId, kidId, taskIds[1], at("05:01", d));
     expect(await completeTask(familyId, kidId, taskIds[2], at("05:02", d))).toMatchObject({ allDone: true, bonus: 0 });
     let kid = (await getState(familyId, at("05:03", d))).kids[0];
-    expect(kid.routines[0].bonusEarned).toBe(false);
+    expect(kid.routines[0].bonusEarned).toBe(true); // all_done row exists (amount 0): the day counts
+    expect(kid.streak).toBe(1);
     // Rename C (deactivates the old task), then undo the last tick.
     await saveKids(familyId, [{
       id: kidId, name: "Kid", colour: "marigold", theme: "star", goalName: "", goalCost: 20,
@@ -148,10 +149,30 @@ describe.skipIf(!hasDb)("completeTask flow", () => {
     expect((await getState(familyId, at("05:09", d))).kids[0].balance).toBe(balanceAfter - 2);
   });
 
+  it("brings back a job deleted and re-added by mistake with its tick intact", async () => {
+    const { completeTask, getState, saveKids } = await import("@/lib/family");
+    const d = "07";
+    const base = (tasks: { label: string; days: number[]; date: string | null }[]) => [{
+      id: kidId, name: "Kid", colour: "marigold", theme: "star", goalName: "", goalCost: 20,
+      routines: [{ id: morning, name: "Morning", startTime: "07:00", endTime: "08:15", days: [1, 2, 3, 4, 5], bonus: 3, streak: true, tasks },
+      { id: bedtime, name: "Bedtime", startTime: "18:30", endTime: "19:30", days: [0, 1, 2, 3, 4, 5, 6], bonus: 2, streak: false,
+        tasks: [{ label: "Bath", days: [], date: null }, { label: "Story", days: [], date: null }] }],
+    }];
+    const all = [{ label: "A", days: [], date: null }, { label: "B", days: [], date: null }, { label: "C", days: [], date: null }, { label: "Swim", days: [2], date: null }];
+    await saveKids(familyId, base(all), at("06:20", d));
+    const a = (await getState(familyId, at("06:21", d))).kids[0].routines[0].tasks.find((t) => t.label === "A")!;
+    await completeTask(familyId, kidId, a.id, at("06:22", d));
+    await saveKids(familyId, base(all.slice(1)), at("06:23", d));
+    await saveKids(familyId, base(all), at("06:24", d));
+    const again = (await getState(familyId, at("06:25", d))).kids[0].routines[0].tasks.find((t) => t.label === "A")!;
+    expect(again.id).toBe(a.id);
+    expect(again.done).toBe(true);
+  });
+
   it("lets a one-off share a label with a recurring job, and rejects a duplicate", async () => {
     const { addOneOff, getState, saveKids } = await import("@/lib/family");
-    await addOneOff(familyId, bedtime, "Bath", "2026-10-08");
-    await expect(addOneOff(familyId, bedtime, "Bath", "2026-10-08")).rejects.toThrow("already on");
+    await addOneOff(familyId, bedtime, "Bath", "2026-10-08", at("06:00", "07"));
+    await expect(addOneOff(familyId, bedtime, "Bath", "2026-10-08", at("06:00", "07"))).rejects.toThrow("already on");
     let kid = (await getState(familyId, at("06:00", "08"))).kids[0];
     expect(kid.routines[1].tasks.map((t) => t.label)).toEqual(["Bath", "Story", "Bath"]);
     // Saving the editor as-is keeps both: keyed by label and date.
@@ -173,7 +194,7 @@ describe.skipIf(!hasDb)("completeTask flow", () => {
   it("adds a one-off, copies routines, and saves routine edits by id", async () => {
     const { addOneOff, copyRoutines, getState, saveKids } = await import("@/lib/family");
     const { prisma } = await import("@/lib/prisma");
-    await addOneOff(familyId, bedtime, "Dentist form", "2026-10-07");
+    await addOneOff(familyId, bedtime, "Dentist form", "2026-10-07", at("06:00", "07"));
     let kid = (await getState(familyId, at("06:00", "07"))).kids[0];
     expect(kid.routines[1].tasks.map((t) => t.label)).toContain("Dentist form");
     expect((await getState(familyId, at("06:00", "08"))).kids[0].routines[1].tasks.map((t) => t.label)).not.toContain("Dentist form");
@@ -188,6 +209,7 @@ describe.skipIf(!hasDb)("completeTask flow", () => {
     expect(copied.routines[1].allTasks.filter((t) => t.date).map((t) => t.date)).toEqual(["2026-10-08", "2026-10-07"]);
 
     kid = (await getState(familyId, at("06:00", "07"))).kids[0];
+    const balanceBefore = kid.balance;
     await saveKids(familyId, [{
       id: kidId, name: "Kid", colour: "marigold", theme: "star", goalName: "", goalCost: 20,
       routines: [{ id: morning, name: "Morning", startTime: "07:00", endTime: "08:30", days: [1, 2, 3, 4, 5], bonus: 3, streak: true,
@@ -198,6 +220,6 @@ describe.skipIf(!hasDb)("completeTask flow", () => {
     expect(kid.routines[0].endTime).toBe("08:30");
     expect(kid.routines[0].allTasks.map((t) => t.label)).toEqual(["A", "New job"]);
     // Bedtime is archived, not deleted: its earned tokens survive.
-    expect(kid.balance).toBe(1);
+    expect(kid.balance).toBe(balanceBefore);
   });
 });
